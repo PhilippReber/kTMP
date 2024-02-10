@@ -5,14 +5,20 @@ from scipy.io import savemat
 from scipy.io import wavfile
 import matplotlib.pyplot as plt
 import os.path as op
+import scipy.io.wavfile as wavfile
+from scipy.fft import fft, fftfreq
+from scipy.signal import find_peaks
+from scipy.stats import zscore
+
 
 class kTMP_mask:
     """
-    Example
-    -------
-    
+    Example 1
+    ---------
+    from kTMP_mask import kTMP_mask
+
     Mask = kTMP_mask()
-    modulators = [4, (17,28)]  # should be a list. if element of list is a tuple, will blend randomly across.
+    modulators = [4, (17,28)]  # should be a list. if element of list is a tuple, modulation will blend randomly across.
     duration = 10
 
     Mask.make_mask(modulators=modulators, duration=duration)
@@ -20,6 +26,18 @@ class kTMP_mask:
     Mask.plot()
     Mask.play()
 
+    Example 2
+    ---------
+    from kTMP_mask import kTMP_mask
+    
+    Mask = kTMP_mask()
+    modulators = None
+    duration = 60
+    sampling_rate = 44100
+
+    peak_freqs, peak_powers_n = Mask.analyze_wav('/path/to/file.wav')  # load in wav file to reproduce its spectrum 
+    Mask.make_mask(modulators=modulators, duration=duration, carriers=peak_freqs, carrier_amps=peak_powers_n, sampling_rate=sampling_rate)
+    
     """
 
     def __init__(self):
@@ -115,14 +133,60 @@ class kTMP_mask:
         savemat(f'{path}.mat', mdict)
         wavfile.write(f'{path}.wav', self.sampling_rate, self.signal)
 
+    def analyze_wav(self, path, plot=False):
+        """
+        Read in a wav file to reproduce specific spectral profiles.
+
+        Parameters
+        ----------
+        path : str 
+            The file path to the wav file.
+
+        Returns
+        -------
+        peak_freqs : array-like
+            The frequency bins of the FFT that have extreme power.
+        peak_powers_n : array-like
+            The normalized power values associated with each frequency bin.
+        """
+        # read the wav file
+        sfreq, data = wavfile.read(path)
+        if len(data.shape) > 1:
+            data = data[:,0]
+        
+        # compute fft
+        power = np.abs(fft(data))
+        freq_bins = np.abs(fftfreq(len(data), d=1/sfreq))
+
+        # extract spectral peaks to reproduce
+        freq_sfreq = len(freq_bins[(freq_bins > 0) & (freq_bins <= 1)])
+        all_peak_ixs = find_peaks(power, distance=20*freq_sfreq)[0]
+        z_power = zscore(power)
+        peak_ixs = [ix for ix in all_peak_ixs if z_power[ix] > 1.641 and freq_bins[ix] > 1000]
+        peak_freqs = freq_bins[peak_ixs]
+        peak_powers = power[peak_ixs]
+        peak_powers_n = (peak_powers - np.min(peak_powers)) / (np.max(peak_powers) - np.min(peak_powers))      
+
+        if plot:
+            plt.figure()
+            for ix in peak_ixs:
+                plt.scatter(freq_bins[ix], power[ix], color='red', s=8)
+            plt.plot(freq_bins, power)
+            plt.xlim(0,16000)
+            plt.show()
+
+        return peak_freqs, peak_powers_n
+
 
 def main():
     Mask = kTMP_mask()
     modulators = [(2,4)]
-    duration = 10
+    duration = 60
+    sampling_rate = 44100
 
-    Mask.make_mask(modulators=modulators, duration=duration)
-    # Mask.save('mask')
+    peak_freqs, peak_powers_n = Mask.analyze_wav('/path/to/file.wav')
+    Mask.make_mask(modulators=modulators, duration=duration, carriers=peak_freqs, carrier_amps=peak_powers_n, sampling_rate=sampling_rate)
+    Mask.save('mask')
     Mask.plot()
     Mask.play()
 
